@@ -1,0 +1,290 @@
+import mysql.connector
+from datetime import datetime
+
+def connect_db():
+    connection = mysql.connector.connect(
+        host="localhost",
+        user="root",password="",database="lab_eq_tracker")
+    print("Connected to MySQL database")
+    return connection
+
+def create_tables():
+    connection = connect_db()
+    cursor = connection.cursor()
+    tables = [
+        ("chem_chemicals", "Chemicals"),
+        ("chem_apparatus", "Apparatus"),
+        ("phys_measuring_instruments", "Measuring Instruments"),
+        ("phys_optical_instruments", "Optical Instruments"),
+        ("phys_electrical_instruments", "Electrical Instruments"),
+        ("phys_thermal_instruments", "Thermal Instruments"),
+        ("phys_acoustic_instruments", "Acoustic Instruments"),
+        ("bio_microscopes", "Microscopes"),
+        ("bio_specimens_slides", "Specimens and Slides"),
+        ("bio_dissection_tools", "Dissection Tools")
+    ]
+    for table, _ in tables:
+        cursor.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                id INT PRIMARY KEY AUTO_INCREMENT,
+                name VARCHAR(255) NOT NULL,
+                status ENUM('In Use', 'Free', 'Damaged') NOT NULL,
+                CHECK (id BETWEEN 100 AND 999)
+            ) AUTO_INCREMENT = 100
+        """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reservations (
+            reservation_id INT PRIMARY KEY AUTO_INCREMENT,
+            equipment_id INT NOT NULL,
+            lab VARCHAR(50) NOT NULL,
+            category VARCHAR(50) NOT NULL,
+            user_name VARCHAR(255) NOT NULL,
+            reservation_date DATE NOT NULL
+        )
+    """)
+    connection.commit()
+    cursor.close()
+    connection.close()
+    print("All tables created or already exist")
+
+def add_equipment(table, lab, category):
+    connection = connect_db()
+    cursor = connection.cursor()
+    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+    count = cursor.fetchone()[0]
+    if count >= 900:
+        print("Cannot add more equipment: ID limit reached")
+        cursor.close()
+        connection.close()
+        return
+    name = input("Enter equipment name: ")
+    status = input("Enter status (In Use, Free, Damaged): ")
+    if status not in ["In Use", "Free", "Damaged"]:
+        print("Invalid status! Must be 'In Use', 'Free', or 'Damaged'")
+        cursor.close()
+        connection.close()
+        return
+    query = f"INSERT INTO {table} (name, status) VALUES (%s, %s)"
+    cursor.execute(query, (name, status))
+    connection.commit()
+    print("Equipment added successfully")
+    cursor.close()
+    connection.close()
+
+def view_equipment(table, lab, category):
+    connection = connect_db()
+    cursor = connection.cursor()
+    query = f"SELECT * FROM {table}"
+    cursor.execute(query)
+    results = cursor.fetchall()
+    if results:
+        print(f"\n{lab} - {category} Equipment List:")
+        print("ID | Name | Status")
+        print("-" * 40)
+        for row in results:
+            print(f"{row[0]} | {row[1]} | {row[2]}")
+    else:
+        print(f"No equipment found in {lab} - {category}")
+    cursor.close()
+    connection.close()
+
+def update_equipment(table, lab, category):
+    equipment_id = input("Enter equipment ID to update: ")
+    name = input("Enter new name (or press Enter to keep unchanged): ")
+    status = input("Enter new status (In Use, Free, Damaged, or press Enter to keep unchanged): ")
+    if status and status not in ["In Use", "Free", "Damaged"]:
+        print("Invalid status! Must be 'In Use', 'Free', or 'Damaged'")
+        return
+    connection = connect_db()
+    cursor = connection.cursor()
+    query = f"UPDATE {table} SET "
+    updates = []
+    values = []
+    if name:
+        updates.append("name = %s")
+        values.append(name)
+    if status:
+        updates.append("status = %s")
+        values.append(status)
+    if updates:
+        query += ", ".join(updates) + " WHERE id = %s"
+        values.append(equipment_id)
+        cursor.execute(query, values)
+        connection.commit()
+        if cursor.rowcount > 0:
+            print("Equipment updated successfully")
+        else:
+            print("No equipment found with that ID")
+    else:
+        print("No updates provided")
+    cursor.close()
+    connection.close()
+
+def delete_equipment(table, lab, category):
+    equipment_id = input("Enter equipment ID to delete: ")
+    connection = connect_db()
+    cursor = connection.cursor()
+    query = f"DELETE FROM {table} WHERE id = %s"
+    cursor.execute(query, (equipment_id,))
+    connection.commit()
+    if cursor.rowcount > 0:
+        print("Equipment deleted successfully")
+    else:
+        print("No equipment found with that ID")
+    cursor.close()
+    connection.close()
+
+def reserve_equipment(table, lab, category):
+    equipment_id = input("Enter equipment ID to reserve: ")
+    user_name = input("Enter your name: ")
+    reservation_date = input("Enter reservation date (YYYY-MM-DD): ")
+    if not reservation_date or len(reservation_date) != 10 or reservation_date[4] != '-' or reservation_date[7] != '-':
+        print("Invalid date format! Use YYYY-MM-DD")
+        return
+    connection = connect_db()
+    cursor = connection.cursor()
+    cursor.execute(f"SELECT status FROM {table} WHERE id = %s", (equipment_id,))
+    result = cursor.fetchone()
+    if not result:
+        print("No equipment found with that ID")
+        cursor.close()
+        connection.close()
+        return
+    if result[0] != "Free":
+        print("Equipment is not available for reservation (must be Free)")
+        cursor.close()
+        connection.close()
+        return
+    cursor.execute("INSERT INTO reservations (equipment_id, lab, category, user_name, reservation_date) VALUES (%s, %s, %s, %s, %s)",
+                  (equipment_id, lab, category, user_name, reservation_date))
+    cursor.execute(f"UPDATE {table} SET status = 'In Use' WHERE id = %s", (equipment_id,))
+    connection.commit()
+    print("Equipment reserved successfully")
+    cursor.close()
+    connection.close()
+
+def view_reservations(lab, category):
+    connection = connect_db()
+    cursor = connection.cursor()
+    query = "SELECT reservation_id, equipment_id, user_name, reservation_date FROM reservations WHERE lab = %s AND category = %s"
+    cursor.execute(query, (lab, category))
+    results = cursor.fetchall()
+    if results:
+        print(f"\n{lab} - {category} Reservations:")
+        print("Reservation ID | Equipment ID | User | Date")
+        print("-" * 50)
+        for row in results:
+            print(f"{row[0]} | {row[1]} | {row[2]} | {row[3]}")
+    else:
+        print(f"No reservations found in {lab} - {category}")
+    cursor.close()
+    connection.close()
+
+def category_menu(lab, category, table):
+    while True:
+        print(f"\n{lab} Lab - {category}")
+        print("1. Add Equipment")
+        print("2. View Equipment")
+        print("3. Update Equipment")
+        print("4. Delete Equipment")
+        print("5. Reserve Equipment")
+        print("6. View Reservations")
+        print("7. Back")
+        choice = input("Enter choice: ")
+        if choice == '1':
+            add_equipment(table, lab, category)
+        elif choice == '2':
+            view_equipment(table, lab, category)
+        elif choice == '3':
+            update_equipment(table, lab, category)
+        elif choice == '4':
+            delete_equipment(table, lab, category)
+        elif choice == '5':
+            reserve_equipment(table, lab, category)
+        elif choice == '6':
+            view_reservations(lab, category)
+        elif choice == '7':
+            break
+        else:
+            print("Invalid choice! Please try again.")
+
+def chemistry_menu():
+    while True:
+        print("\nChemistry Lab")
+        print("1. Chemicals")
+        print("2. Apparatus")
+        print("3. Back")
+        choice = input("Enter choice: ")
+        if choice == '1':
+            category_menu("Chemistry", "Chemicals", "chem_chemicals")
+        elif choice == '2':
+            category_menu("Chemistry", "Apparatus", "chem_apparatus")
+        elif choice == '3':
+            break
+        else:
+            print("Invalid choice! Please try again.")
+
+def physics_menu():
+    while True:
+        print("\nPhysics Lab")
+        print("1. Measuring Instruments")
+        print("2. Optical Instruments")
+        print("3. Electrical Instruments")
+        print("4. Thermal Instruments")
+        print("5. Acoustic Instruments")
+        print("6. Back")
+        choice = input("Enter choice: ")
+        if choice == '1':
+            category_menu("Physics", "Measuring Instruments", "phys_measuring_instruments")
+        elif choice == '2':
+            category_menu("Physics", "Optical Instruments", "phys_optical_instruments")
+        elif choice == '3':
+            category_menu("Physics", "Electrical Instruments", "phys_electrical_instruments")
+        elif choice == '4':
+            category_menu("Physics", "Thermal Instruments", "phys_thermal_instruments")
+        elif choice == '5':
+            category_menu("Physics", "Acoustic Instruments", "phys_acoustic_instruments")
+        elif choice == '6':
+            break
+        else:
+            print("Invalid choice! Please try again.")
+
+def biology_menu():
+    while True:
+        print("\nBiology Lab")
+        print("1. Microscopes")
+        print("2. Specimens and Slides")
+        print("3. Dissection Tools")
+        print("4. Back")
+        choice = input("Enter choice: ")
+        if choice == '1':
+            category_menu("Biology", "Microscopes", "bio_microscopes")
+        elif choice == '2':
+            category_menu("Biology", "Specimens and Slides", "bio_specimens_slides")
+        elif choice == '3':
+            category_menu("Biology", "Dissection Tools", "bio_dissection_tools")
+        elif choice == '4':
+            break
+        else:
+            print("Invalid choice! Please try again.")
+
+def main():
+    create_tables()
+    while True:
+        print("\nLab Equipment Tracker")
+        print("1. Chemistry")
+        print("2. Physics")
+        print("3. Biology")
+        print("4. Exit")
+        choice = input("Enter choice: ")
+        if choice == '1':
+            chemistry_menu()
+        elif choice == '2':
+            physics_menu()
+        elif choice == '3':
+            biology_menu()
+        elif choice == '4':
+            print("Exiting program")
+            break
+        else:
+            print("Invalid choice! Please try again.")
