@@ -10,7 +10,7 @@ connection = mysql.connector.connect(
 print("Connected to MySQL database")
 
 while True:
-    print("\nLab Equipment Tracker")
+    print("Lab Equipment Tracker")
     print("1. Chemistry")
     print("2. Physics")
     print("3. Biology")
@@ -19,7 +19,7 @@ while True:
     
     if choice == '1':
         while True:
-            print("\nChemistry Lab")
+            print("Chemistry Lab")
             print("1. Chemicals")
             print("2. Apparatus")
             print("3. Back")
@@ -30,7 +30,7 @@ while True:
                 lab = "Chemistry"
                 category = "Chemicals"
                 while True:
-                    print(f"\n{lab} Lab - {category}")
+                    print(f"{lab} Lab - {category}")
                     print("1. Add Equipment")
                     print("2. View Equipment")
                     print("3. Update Equipment")
@@ -54,7 +54,7 @@ while True:
                             print("Invalid status! Must be 'In Use', 'Free', or 'Damaged'")
                             cursor.close()
                             continue
-                        cursor.execute(f"SHOW TABLES LIKE '{table}'")
+                        cursor.execute("SHOW TABLES LIKE '{table}'")
                         if not cursor.fetchone():
                             print("Table not found")
                             cursor.close()
