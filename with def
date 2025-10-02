@@ -3,14 +3,24 @@ from datetime import datetime
 import re
 
 def connect_db():
-    connection = mysql.connector.connect(
-        host="localhost",
-        user="root", password="", database="lab_eq_tracker")
-    print("Connected to MySQL database")
-    return connection
+    try:
+        connection = mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",
+            database="lab_eq_tracker"
+        )
+        print("Connected to MySQL database")
+        return connection
+    except mysql.connector.Error as err:
+        print(f"Database connection error: {err}")
+        return None
 
 def create_tables():
     connection = connect_db()
+    if not connection:
+        print("Failed to connect to database, cannot create tables")
+        return
     cursor = connection.cursor()
     tables = [
         ("chem_chemicals", "Chemicals"),
@@ -24,18 +34,28 @@ def create_tables():
         ("bio_specimens_slides", "Specimens and Slides"),
         ("bio_dissection_tools", "Dissection Tools")
     ]
+    print("Creating or updating equipment tables...")
     for table, _ in tables:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS %s (
                 id INT PRIMARY KEY AUTO_INCREMENT,
                 name VARCHAR(255) NOT NULL,
                 status ENUM('In Use', 'Free', 'Damaged') NOT NULL,
-                quantity INT NOT NULL CHECK (quantity >= 0),
+                quantity INT NOT NULL DEFAULT 0 CHECK (quantity >= 0),
                 CHECK (id BETWEEN 100 AND 999)
             ) AUTO_INCREMENT = 100
         """ % table)
+        # Check if quantity column exists
+        cursor.execute("SHOW COLUMNS FROM %s LIKE 'quantity'" % table)
+        if not cursor.fetchone():
+            print(f"Adding 'quantity' column to {table}")
+            cursor.execute("ALTER TABLE %s ADD COLUMN quantity INT NOT NULL DEFAULT 0 CHECK (quantity >= 0)" % table)
+    
+    # Drop and recreate reservations table to ensure correct schema
+    print("Dropping and recreating reservations table...")
+    cursor.execute("DROP TABLE IF EXISTS reservations")
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS reservations (
+        CREATE TABLE reservations (
             reservation_id INT PRIMARY KEY AUTO_INCREMENT,
             equipment_id INT NOT NULL,
             lab VARCHAR(50) NOT NULL,
@@ -46,64 +66,102 @@ def create_tables():
             quantity_reserved INT NOT NULL CHECK (quantity_reserved > 0)
         )
     """)
+    # Verify user_id column exists
+    cursor.execute("SHOW COLUMNS FROM reservations LIKE 'user_id'")
+    if cursor.fetchone():
+        print("Verified: 'user_id' column exists in reservations table")
+    else:
+        print("Error: 'user_id' column not found after table creation")
+    
     connection.commit()
     cursor.close()
     connection.close()
+    print("Tables created or updated successfully")
 
 def add_equipment(table, lab, category):
-    connection = connect_db()
-    cursor = connection.cursor()
-    cursor.execute("SELECT COUNT(*) FROM %s" % table)
-    count = cursor.fetchone()[0]
-    if count >= 900:
-        print("Cannot add more equipment: ID limit reached")
-        cursor.close()
-        connection.close()
+    valid_tables = [
+        "chem_chemicals", "chem_apparatus", "phys_measuring_instruments",
+        "phys_optical_instruments", "phys_electrical_instruments", "phys_thermal_instruments",
+        "phys_acoustic_instruments", "bio_microscopes", "bio_specimens_slides", "bio_dissection_tools"
+    ]
+    if table not in valid_tables:
+        print("Invalid table name!")
         return
-    name = input("Enter equipment name: ")
-    status = input("Enter status (In Use, Free, Damaged): ")
-    if status not in ["In Use", "Free", "Damaged"]:
-        print("Invalid status! Must be 'In Use', 'Free', or 'Damaged'")
-        cursor.close()
-        connection.close()
+    connection = connect_db()
+    if not connection:
         return
     try:
-        quantity = int(input("Enter quantity: "))
-        if quantity < 0:
-            print("Quantity must be non-negative")
-            cursor.close()
-            connection.close()
+        cursor = connection.cursor()
+        cursor.execute("SELECT COUNT(*) FROM %s" % table)
+        count = cursor.fetchone()[0]
+        if count >= 900:
+            print("Cannot add more equipment: ID limit reached")
             return
-    except ValueError:
-        print("Invalid quantity! Must be a number")
-        cursor.close()
+        name = input("Enter equipment name: ")
+        status = input("Enter status (In Use, Free, Damaged): ")
+        if status not in ["In Use", "Free", "Damaged"]:
+            print("Invalid status! Must be 'In Use', 'Free', or 'Damaged'")
+            return
+        try:
+            quantity = int(input("Enter quantity: "))
+            if quantity < 0:
+                print("Quantity must be non-negative")
+                return
+        except ValueError:
+            print("Invalid quantity! Must be a number")
+            return
+        query = "INSERT INTO %s (name, status, quantity) VALUES (%%s, %%s, %%s)" % table
+        cursor.execute(query, (name, status, quantity))
+        connection.commit()
+        print("Equipment added successfully")
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
         connection.close()
-        return
-    query = "INSERT INTO %s (name, status, quantity) VALUES (%%s, %%s, %%s)" % table
-    cursor.execute(query, (name, status, quantity))
-    connection.commit()
-    print("Equipment added successfully")
-    cursor.close()
-    connection.close()
 
 def view_equipment(table, lab, category):
+    valid_tables = [
+        "chem_chemicals", "chem_apparatus", "phys_measuring_instruments",
+        "phys_optical_instruments", "phys_electrical_instruments", "phys_thermal_instruments",
+        "phys_acoustic_instruments", "bio_microscopes", "bio_specimens_slides", "bio_dissection_tools"
+    ]
+    if table not in valid_tables:
+        print("Invalid table name!")
+        return
     connection = connect_db()
-    cursor = connection.cursor()
-    query = "SELECT * FROM %s" % table
-    cursor.execute(query)
-    results = cursor.fetchall()
-    if results:
-        print("\n%s - %s Equipment List:" % (lab, category))
-        print("ID | Name | Status | Quantity")
-        print("-" * 50)
-        for row in results:
-            print("%s | %s | %s | %s" % (row[0], row[1], row[2], row[3]))
-    else:
-        print("No equipment found in %s - %s" % (lab, category))
-    cursor.close()
-    connection.close()
+    if not connection:
+        return
+    try:
+        cursor = connection.cursor()
+        query = "SELECT * FROM %s" % table
+        cursor.execute(query)
+        results = cursor.fetchall()
+        if results:
+            print("\n%s - %s Equipment List:" % (lab, category))
+            print("ID | Name | Status | Quantity")
+            print("-" * 50)
+            for row in results:
+                print("%s | %s | %s | %s" % (row[0], row[1], row[2], row[3]))
+        else:
+            print("No equipment found in %s - %s" % (lab, category))
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        connection.close()
 
 def update_equipment(table, lab, category):
+    valid_tables = [
+        "chem_chemicals", "chem_apparatus", "phys_measuring_instruments",
+        "phys_optical_instruments", "phys_electrical_instruments", "phys_thermal_instruments",
+        "phys_acoustic_instruments", "bio_microscopes", "bio_specimens_slides", "bio_dissection_tools"
+    ]
+    if table not in valid_tables:
+        print("Invalid table name!")
+        return
     equipment_id = input("Enter equipment ID to update: ")
     name = input("Enter new name (or press Enter to keep unchanged): ")
     status = input("Enter new status (In Use, Free, Damaged, or press Enter to keep unchanged): ")
@@ -123,48 +181,78 @@ def update_equipment(table, lab, category):
     else:
         quantity = None
     connection = connect_db()
-    cursor = connection.cursor()
-    query = "UPDATE %s SET " % table
-    updates = []
-    values = []
-    if name:
-        updates.append("name = %s")
-        values.append(name)
-    if status:
-        updates.append("status = %s")
-        values.append(status)
-    if quantity is not None:
-        updates.append("quantity = %s")
-        values.append(quantity)
-    if updates:
-        query += ", ".join(updates) + " WHERE id = %s"
-        values.append(equipment_id)
-        cursor.execute(query, values)
-        connection.commit()
-        if cursor.rowcount > 0:
-            print("Equipment updated successfully")
+    if not connection:
+        return
+    try:
+        cursor = connection.cursor()
+        query = "UPDATE %s SET " % table
+        updates = []
+        values = []
+        if name:
+            updates.append("name = %s")
+            values.append(name)
+        if status:
+            updates.append("status = %s")
+            values.append(status)
+        if quantity is not None:
+            updates.append("quantity = %s")
+            values.append(quantity)
+        if updates:
+            query += ", ".join(updates) + " WHERE id = %s"
+            values.append(equipment_id)
+            cursor.execute(query, values)
+            connection.commit()
+            if cursor.rowcount > 0:
+                print("Equipment updated successfully")
+            else:
+                print("No equipment found with that ID")
         else:
-            print("No equipment found with that ID")
-    else:
-        print("No updates provided")
-    cursor.close()
-    connection.close()
+            print("No updates provided")
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        connection.close()
 
 def delete_equipment(table, lab, category):
+    valid_tables = [
+        "chem_chemicals", "chem_apparatus", "phys_measuring_instruments",
+        "phys_optical_instruments", "phys_electrical_instruments", "phys_thermal_instruments",
+        "phys_acoustic_instruments", "bio_microscopes", "bio_specimens_slides", "bio_dissection_tools"
+    ]
+    if table not in valid_tables:
+        print("Invalid table name!")
+        return
     equipment_id = input("Enter equipment ID to delete: ")
     connection = connect_db()
-    cursor = connection.cursor()
-    query = "DELETE FROM %s WHERE id = %s" % (table, equipment_id)
-    cursor.execute(query)
-    connection.commit()
-    if cursor.rowcount > 0:
-        print("Equipment deleted successfully")
-    else:
-        print("No equipment found with that ID")
-    cursor.close()
-    connection.close()
+    if not connection:
+        return
+    try:
+        cursor = connection.cursor()
+        query = "DELETE FROM %s WHERE id = %s" % table
+        cursor.execute(query, (equipment_id,))
+        connection.commit()
+        if cursor.rowcount > 0:
+            print("Equipment deleted successfully")
+        else:
+            print("No equipment found with that ID")
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        connection.close()
 
 def reserve_equipment(table, lab, category, user_id):
+    valid_tables = [
+        "chem_chemicals", "chem_apparatus", "phys_measuring_instruments",
+        "phys_optical_instruments", "phys_electrical_instruments", "phys_thermal_instruments",
+        "phys_acoustic_instruments", "bio_microscopes", "bio_specimens_slides", "bio_dissection_tools"
+    ]
+    if table not in valid_tables:
+        print("Invalid table name!")
+        return
     equipment_id = input("Enter equipment ID to reserve: ")
     user_name = input("Enter your name: ")
     reservation_date = input("Enter reservation date (YYYY-MM-DD): ")
@@ -180,52 +268,62 @@ def reserve_equipment(table, lab, category, user_id):
         print("Invalid date format! Use YYYY-MM-DD")
         return
     connection = connect_db()
-    cursor = connection.cursor()
-    cursor.execute("SELECT status, quantity FROM %s WHERE id = %s" % (table, equipment_id))
-    result = cursor.fetchone()
-    if not result:
-        print("No equipment found with that ID")
-        cursor.close()
-        connection.close()
+    if not connection:
         return
-    status, available_quantity = result
-    if status != "Free":
-        print("Equipment is not available for reservation (must be Free)")
-        cursor.close()
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT status, quantity FROM %s WHERE id = %s" % (table, "%s"), (equipment_id,))
+        result = cursor.fetchone()
+        if not result:
+            print("No equipment found with that ID")
+            return
+        status, available_quantity = result
+        if status != "Free":
+            print("Equipment is not available for reservation (must be Free)")
+            return
+        if available_quantity < quantity_reserved:
+            print("Not enough equipment available. Available quantity: %s" % available_quantity)
+            return
+        print("Inserting reservation with user_id:", user_id)
+        cursor.execute("INSERT INTO reservations (equipment_id, lab, category, user_name, user_id, reservation_date, quantity_reserved) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                      (equipment_id, lab, category, user_name, user_id, reservation_date, quantity_reserved))
+        new_quantity = available_quantity - quantity_reserved
+        cursor.execute("UPDATE %s SET quantity = %s WHERE id = %s" % (table, "%s", "%s"), (new_quantity, equipment_id))
+        if new_quantity == 0:
+            cursor.execute("UPDATE %s SET status = 'In Use' WHERE id = %s" % (table, "%s"), (equipment_id,))
+        connection.commit()
+        print("Equipment reserved successfully")
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
         connection.close()
-        return
-    if available_quantity < quantity_reserved:
-        print("Not enough equipment available. Available quantity: %s" % available_quantity)
-        cursor.close()
-        connection.close()
-        return
-    cursor.execute("INSERT INTO reservations (equipment_id, lab, category, user_name, user_id, reservation_date, quantity_reserved) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                  (equipment_id, lab, category, user_name, user_id, reservation_date, quantity_reserved))
-    new_quantity = available_quantity - quantity_reserved
-    cursor.execute("UPDATE %s SET quantity = %s WHERE id = %s" % (table, "%s", equipment_id), (new_quantity,))
-    if new_quantity == 0:
-        cursor.execute("UPDATE %s SET status = 'In Use' WHERE id = %s" % (table, equipment_id))
-    connection.commit()
-    print("Equipment reserved successfully")
-    cursor.close()
-    connection.close()
 
 def view_reservations(lab, category):
     connection = connect_db()
-    cursor = connection.cursor()
-    query = "SELECT reservation_id, equipment_id, user_name, user_id, reservation_date, quantity_reserved FROM reservations WHERE lab = %s AND category = %s"
-    cursor.execute(query, (lab, category))
-    results = cursor.fetchall()
-    if results:
-        print("\n%s - %s Reservations:" % (lab, category))
-        print("Reservation ID | Equipment ID | User | User ID | Date | Quantity Reserved")
-        print("-" * 80)
-        for row in results:
-            print("%s | %s | %s | %s | %s | %s" % (row[0], row[1], row[2], row[3], row[4], row[5]))
-    else:
-        print("No reservations found in %s - %s" % (lab, category))
-    cursor.close()
-    connection.close()
+    if not connection:
+        return
+    try:
+        cursor = connection.cursor()
+        query = "SELECT reservation_id, equipment_id, user_name, user_id, reservation_date, quantity_reserved FROM reservations WHERE lab = %s AND category = %s"
+        print(f"Executing query: {query} with parameters: {lab}, {category}")
+        cursor.execute(query, (lab, category))
+        results = cursor.fetchall()
+        if results:
+            print("\n%s - %s Reservations:" % (lab, category))
+            print("Reservation ID | Equipment ID | User | User ID | Date | Quantity Reserved")
+            print("-" * 80)
+            for row in results:
+                print("%s | %s | %s | %s | %s | %s" % (row[0], row[1], row[2], row[3], row[4], row[5]))
+        else:
+            print("No reservations found in %s - %s" % (lab, category))
+    except mysql.connector.Error as err:
+        print(f"Database error: {err}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+        connection.close()
 
 def category_menu(lab, category, table, user_role):
     while True:
@@ -369,4 +467,5 @@ def main():
         else:
             print("Invalid choice! Please try again.")
 
-main()
+if __name__ == "__main__":
+    main()
